@@ -6,9 +6,9 @@
 
 ## 1. Overview
 
-This project implements a **distributed topology recognition system** for modular units (BBs), each equipped with ports (North, South, East, West), LEDs, and serial communication. The algorithm allows the network of modules to **automatically detect geometric shapes** such as a **circle**, **cross (+)**, and **H** formation. 
+This code is our implementation of the **distributed shape recognition system** for blinky blocks. The algorithm allows the network of modules to **automatically detect geometric shapes** such as a **circle**, **cross (+)**, and **H** formation. 
 
-Each block behaves autonomously and communicates only with directly connected neighbors. Color variations on the LEDs represent detection states as described in the README. [web:1]
+Each block behaves autonomously and communicates only with directly connected neighbors. Color variations on the LEDs represent detection states as described in the README. 
 
 ---
 
@@ -19,7 +19,7 @@ The architecture is divided into **three main parts**:
 1. **Initialization (`BBinit`)**  
    - Detects all active neighbors.  
    - Generates a random ID (`my_id`) to differentiate messages.  
-   - Resets all detection states via `circle_reset_state()`. [web:1]
+   - Resets all detection states via `circle_reset_state()`. 
 
 2. **Main Loop (`BBloop`)**  
    - Periodically polls for connection changes.  
@@ -112,4 +112,5 @@ This guide explains **all LED colors** you may see during the circle detection p
 
 A video demonstration illustrates the shape transitions and LED states:  
 [![Demo Video](https://www.canva.com/design/DAG6j2xt-qs/kHveo4VeeYsWkw4HTbUqwQ/watch?utm_content=DAG6j2xt-qs&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h2976927901)](https://www.canva.com/design/DAG6j2xt-qs/kHveo4VeeYsWkw4HTbUqwQ/watch) [web:1]
+
 
