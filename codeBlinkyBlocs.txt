@@ -1,0 +1,659 @@
+// Kyllian Cuevas, Pierre Meyer, Yohann Mitel, Thomas Mirbey | M2 IOT
+#include <user_code.h>
+#include <layer3_generic.h>
+#include <microphone.h>
+#include <speaker.h>
+#include <light.h>
+#include <abstraction.h>
+#include <BB.h>
+#include <hwLED.h>
+#include <bb_global.h>
+#include <serial.h>
+#include <layer3_generic.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define ADD    1
+#define REMOVE 2
+#define PLUS   3
+#define H      4
+#define HR     44
+#define O      5
+#define HRGO   6
+#define RESET  7
+
+#define MSG_SOUTH_INFO   10
+#define MSG_RING_STEP    11
+#define MSG_RING_COLOR   12
+#define MSG_RING_FAIL    13
+
+static const uint8_t PORT_N = 0;
+static const uint8_t PORT_W = 2;
+static const uint8_t PORT_E = 3;
+static const uint8_t PORT_S = 4;
+
+#define RING_LEN 8
+static const uint8_t ring_seq[RING_LEN] = {
+    PORT_W, PORT_S, PORT_S, PORT_E, PORT_E, PORT_N, PORT_N, PORT_W
+};
+
+#define LEADER_DECIDE_TICKS  15
+#define START_RING_TICKS     20
+#define RING_TIMEOUT_TICKS   80
+
+uint8_t distance = 255;
+int     returning = 0;
+int     nei = 0;
+
+uint8_t last_msg_id = 0xFF;
+int     id_msg = 0;
+uint8_t my_id;
+
+bool port_connected[NB_SERIAL_PORT];
+
+bool is_plus = false;
+bool even_pair_connected = false;
+bool odd_pair_connected  = false;
+uint8_t connected_ports[2];
+uint8_t count = 0;
+
+int  hrcount    = 0;
+int  hr_answers = 0;
+bool is_parent  = false;
+
+bool in_plus    = false;
+
+bool has_south = false;
+bool neighbor_has_south[NB_SERIAL_PORT];
+
+bool is_leader         = false;
+bool leader_decided    = false;
+
+bool ring_test_started = false;
+bool ring_ok           = false;
+bool ring_coloring     = false;
+bool ring_failed       = false;
+
+bool on_ring           = false;
+
+uint8_t leader_id       = 0;
+uint8_t ring_step_seen  = 0xFF;
+uint8_t color_step_seen = 0xFF;
+
+int ticks      = 0;
+int ring_timer = 0;
+
+/*
+@goal :
+    Check if the circle pattern is currently more important.
+@output :
+    bool
+*/
+static inline bool circle_has_priority() {
+    return ring_test_started || ring_ok || ring_coloring || on_ring;
+}
+
+/*
+@goal :
+    Reset all local variables related to circle detection.
+*/
+static void circle_reset_state() {
+    has_south = port_connected[PORT_S];
+
+    for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+        neighbor_has_south[p] = false;
+    }
+
+    is_leader         = false;
+    leader_decided    = false;
+    ring_test_started = false;
+    ring_ok           = false;
+    ring_coloring     = false;
+    ring_failed       = false;
+    on_ring           = false;
+
+    leader_id         = 0;
+    ring_step_seen    = 0xFF;
+    color_step_seen   = 0xFF;
+    ticks             = 0;
+    ring_timer        = 0;
+
+    setColor(BLACK);
+
+    // send south info
+    if (has_south) {
+        uint8_t data[1] = { MSG_SOUTH_INFO };
+        for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+            if (port_connected[p]) {
+                sendMessage(p, data, 1, 1);
+            }
+        }
+    }
+}
+
+/*
+@goal :
+    Initialize connectivity state and variables.
+*/
+void BBinit() {
+    setColor(BLACK);
+
+    distance = 0;
+    nei      = 0;
+    count    = 0;
+
+    in_plus    = false;
+    is_parent  = false;
+    hrcount    = 0;
+    hr_answers = 0;
+
+    for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+        port_connected[p] = is_connected(p);
+        if (port_connected[p]) {
+            if (count < 2) connected_ports[count++] = p;
+            nei++;
+        }
+    }
+
+    srand((unsigned int)time(NULL));
+    my_id = (uint8_t)(rand() & 0xFF);
+
+    circle_reset_state();
+}
+
+/*
+@goal :
+    Periodically check topology and run circle/cross/H logic.
+*/
+void BBloop() {
+    sleep_msec(100);
+    ticks++;
+
+    int nei2 = 0;
+
+    // check connections update
+    for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+        bool connected_now = is_connected(p);
+        if (port_connected[p] != connected_now) {
+            port_connected[p] = connected_now;
+        }
+        if (connected_now) nei2++;
+    }
+
+    // topology changed
+    if (nei2 != nei) {
+        uint8_t msg_type = (nei2 > nei) ? ADD : REMOVE;
+
+        in_plus    = false;
+        is_parent  = false;
+        hrcount    = 0;
+        hr_answers = 0;
+
+        circle_reset_state();
+        setColor((nei2 > nei) ? GREEN : RED);
+
+        id_msg++;
+        uint8_t msg_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+
+        // send ADD/REMOVE
+        for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+            if (port_connected[p]) {
+                uint8_t data[3] = { msg_type, p, msg_id };
+                sendMessage(p, data, 3, 1);
+                sleep_msec(100);
+                setColor(BLACK);
+            }
+        }
+
+        // broadcast RESET
+        id_msg++;
+        uint8_t reset_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+        for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+            if (port_connected[p]) {
+                uint8_t rdata[3] = { RESET, p, reset_id };
+                sendMessage(p, rdata, 3, 1);
+                sleep_msec(30);
+            }
+        }
+
+        nei = nei2;
+    }
+
+    // circle: check leader decision
+    if (!ring_failed) {
+        // decide leader
+        if (!leader_decided && ticks >= LEADER_DECIDE_TICKS) {
+
+            // check leader conditions
+            bool hasW = port_connected[PORT_W];
+            bool hasE = port_connected[PORT_E];
+            bool W_S  = neighbor_has_south[PORT_W];
+            bool E_S  = neighbor_has_south[PORT_E];
+
+            // assign leader
+            if (hasW && hasE && W_S && E_S) {
+                is_leader = true;
+                setColor(WHITE);
+            } else {
+                is_leader = false;
+            }
+            leader_decided = true;
+        }
+
+        // start circle test
+        if (is_leader && leader_decided && !ring_test_started && ticks >= START_RING_TICKS) {
+            ring_test_started = true;
+            ring_timer        = 0;
+            on_ring           = true;
+
+            leader_id = (uint8_t)(rand() & 0xFF);
+            if (leader_id == 0) leader_id = 1;
+
+            uint8_t out = ring_seq[0];
+
+            // first step fails?
+            if (!port_connected[out]) {
+                ring_failed = true;
+                uint8_t data[1] = { MSG_RING_FAIL };
+                for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p)
+                    if (port_connected[p]) sendMessage(p, data, 1, 1);
+
+            } else {
+                uint8_t data[3] = { MSG_RING_STEP, leader_id, 0 };
+                sendMessage(out, data, 3, 1);
+            }
+        }
+
+        // circle timeout
+        if (is_leader && ring_test_started && !ring_ok && !ring_failed) {
+            ring_timer++;
+
+            // timeout exceeded
+            if (ring_timer > RING_TIMEOUT_TICKS) {
+                ring_failed = true;
+                uint8_t data[1] = { MSG_RING_FAIL };
+                for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p)
+                    if (port_connected[p]) sendMessage(p, data, 1, 1);
+            }
+        }
+
+        // start coloring
+        if (is_leader && ring_ok && !ring_coloring) {
+            ring_coloring = true;
+
+            uint8_t out = ring_seq[0];
+
+            // missing next?
+            if (!port_connected[out]) {
+                ring_failed = true;
+                uint8_t data[1] = { MSG_RING_FAIL };
+                for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p)
+                    if (port_connected[p]) sendMessage(p, data, 1, 1);
+
+            } else {
+                uint8_t data[3] = { MSG_RING_COLOR, leader_id, 0 };
+                sendMessage(out, data, 3, 1);
+            }
+        }
+    }
+
+    // run cross or H only if circle is not priority
+    if (!circle_has_priority()) {
+
+        // check cross
+        if (nei2 == 4) {
+            in_plus    = true;
+            is_parent  = false;
+            setColor(CYAN);
+
+            sleep_msec(3000);
+            id_msg++;
+
+            uint8_t msg_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+
+            for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+                if (port_connected[p]) {
+                    uint8_t data[3] = { PLUS, p, msg_id };
+                    sendMessage(p, data, 3, 1);
+                }
+            }
+        }
+        // check H start
+        else if (!in_plus && !is_parent && port_connected[PORT_N] && port_connected[PORT_S]) {
+            is_parent  = true;
+            hrcount    = 0;
+            hr_answers = 0;
+
+            setColor(PURPLE);
+            sleep_msec(3000);
+
+            id_msg++;
+            uint8_t msg_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+
+            uint8_t dataN[3] = { H, PORT_N, msg_id };
+            sendMessage(PORT_N, dataN, 3, 1);
+
+            id_msg++;
+            msg_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+
+            uint8_t dataS[3] = { H, PORT_S, msg_id };
+            sendMessage(PORT_S, dataS, 3, 1);
+        }
+    }
+}
+
+/*
+@goal :
+    Handle acknowledgements of standard packets (not used here).
+@param :
+    p : pointer to L3_packet
+*/
+void process_standard_ack(L3_packet *p) {
+    (void)p;
+}
+
+/*
+@goal :
+    Handle unacknowledged standard packets (not used here).
+@param :
+    p : pointer to L3_packet
+*/
+void process_standard_unack(L3_packet *p) {
+    (void)p;
+}
+
+/*
+@goal :
+    Process any incoming packet related to circle, H, cross and topology.
+@param :
+    packet : pointer to L3_packet received on this block
+@output :
+    uint8_t
+        - always 0
+*/
+uint8_t process_standard_packet(L3_packet *packet) {
+    uint8_t type          = packet->packet_content[0];
+    uint8_t incoming_port = packet->io_port;
+
+    // handle south info
+    if (type == MSG_SOUTH_INFO) {
+        if (incoming_port < NB_SERIAL_PORT) {
+            neighbor_has_south[incoming_port] = true;
+        }
+        return 0;
+    }
+
+    // handle ring failure
+    if (type == MSG_RING_FAIL) {
+        circle_reset_state();
+        return 0;
+    }
+
+    if ((type == MSG_RING_STEP || type == MSG_RING_COLOR) && leader_id == 0) {
+        leader_id = packet->packet_content[1];
+    }
+
+    bool uses_msg_id =
+        (type == ADD || type == REMOVE || type == PLUS ||
+         type == H   || type == HR    || type == HRGO ||
+         type == O   || type == RESET);
+
+    // handle message id
+    uint8_t msg_id = 0;
+    if (uses_msg_id) {
+        msg_id = packet->packet_content[2];
+        if (msg_id == last_msg_id) return 0;
+        last_msg_id = msg_id;
+    }
+
+    // global reset message
+    if (type == RESET) {
+        in_plus    = false;
+        is_parent  = false;
+        hrcount    = 0;
+        hr_answers = 0;
+        setColor(BLACK);
+
+        circle_reset_state();
+
+        uint8_t data[3] = { RESET, incoming_port, msg_id };
+        for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+            if (p == incoming_port) continue;
+            if (!is_connected(p)) continue;
+            sendMessage(p, data, 3, 1);
+            sleep_msec(20);
+        }
+        return 0;
+    }
+
+    // ignore H when plus
+    if (in_plus && (type == H || type == HR || type == HRGO)) {
+        return 0;
+    }
+
+    // circle priority over H/+
+    if (circle_has_priority() && (type == H || type == HR || type == HRGO ||
+                                  type == PLUS || type == O)) {
+        return 0;
+    }
+
+    // handle add/remove blink
+    if (type == ADD || type == REMOVE) {
+        uint8_t color = (type == ADD) ? GREEN : RED;
+        for (uint8_t i = 0; i < 2; ++i) {
+            setColor(color);
+            sleep_msec(100);
+            setColor(BLACK);
+            sleep_msec(100);
+            setColor(color);
+            sleep_msec(100);
+            setColor(BLACK);
+        }
+        uint8_t data[3] = { type, incoming_port, msg_id };
+        for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+            if (p == incoming_port) continue;
+            if (!is_connected(p)) continue;
+            sendMessage(p, data, 3, 1);
+            sleep_msec(100);
+        }
+
+    // handle PLUS message
+    } else if (type == PLUS) {
+        in_plus = true;
+        setColor(BLUE);
+
+        id_msg++;
+        uint8_t clear_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+        for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p) {
+            if (!is_connected(p)) continue;
+            if (p == incoming_port) continue;
+            uint8_t dataC[3] = { O, p, clear_id };
+            sendMessage(p, dataC, 3, 1);
+        }
+
+    // handle H request
+    } else if (type == H) {
+        bool hasWest = is_connected(PORT_W);
+        bool hasEast = is_connected(PORT_E);
+        bool condition = (hasWest && hasEast);
+
+        setColor(condition ? RED : BLACK);
+
+        uint8_t parent_id = msg_id;
+        uint8_t verif     = condition ? 1 : 0;
+        uint8_t data[4]   = { HR, incoming_port, parent_id, verif };
+        sendMessage(incoming_port, data, 4, 1);
+
+    // handle HR reply
+    } else if (type == HR) {
+        bool verif = packet->packet_content[3];
+
+        if (is_parent) {
+            hr_answers++;
+            if (verif) hrcount++;
+
+            // all HR received
+            if (hr_answers == 2) {
+
+                // H valid case
+                if (hrcount == 2) {
+                    setColor(YELLOW);
+
+                    id_msg++;
+                    uint8_t new_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                    uint8_t dataN[3] = { HRGO, 1, new_id };
+                    if (port_connected[PORT_N]) sendMessage(PORT_N, dataN, 3, 1);
+
+                    id_msg++;
+                    new_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                    uint8_t dataS[3] = { HRGO, 1, new_id };
+                    if (port_connected[PORT_S]) sendMessage(PORT_S, dataS, 3, 1);
+
+                // H invalid case
+                } else {
+                    setColor(BLACK);
+
+                    id_msg++;
+                    uint8_t clear_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                    uint8_t clearN[3] = { O, PORT_N, clear_id };
+                    uint8_t clearS[3] = { O, PORT_S, clear_id };
+                    if (port_connected[PORT_N]) sendMessage(PORT_N, clearN, 3, 1);
+                    if (port_connected[PORT_S]) sendMessage(PORT_S, clearS, 3, 1);
+                }
+
+                hrcount    = 0;
+                hr_answers = 0;
+            }
+        }
+
+    // handle clear message
+    } else if (type == O) {
+        setColor(BLACK);
+
+    // handle HRGO propagation
+    } else if (type == HRGO) {
+        uint8_t flag = packet->packet_content[1];
+
+        setColor(PURPLE);
+
+        // propagate from hinge
+        if (flag == 1) {
+            if (incoming_port == PORT_S && port_connected[PORT_N]) {
+                id_msg++;
+                uint8_t new_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                uint8_t dataV[3] = { HRGO, 0, new_id };
+                sendMessage(PORT_N, dataV, 3, 1);
+            } else if (incoming_port == PORT_N && port_connected[PORT_S]) {
+                id_msg++;
+                uint8_t new_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                uint8_t dataV[3] = { HRGO, 0, new_id };
+                sendMessage(PORT_S, dataV, 3, 1);
+            }
+
+            if (port_connected[PORT_W]) {
+                id_msg++;
+                uint8_t new_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                uint8_t dataW[3] = { HRGO, 0, new_id };
+                sendMessage(PORT_W, dataW, 3, 1);
+            }
+            if (port_connected[PORT_E]) {
+                id_msg++;
+                uint8_t new_id = (uint8_t)((id_msg ^ my_id) & 0xFF);
+                uint8_t dataE[3] = { HRGO, 0, new_id };
+                sendMessage(PORT_E, dataE, 3, 1);
+            }
+        }
+    }
+
+    // process ring step
+    if (type == MSG_RING_STEP) {
+        uint8_t id   = packet->packet_content[1];
+        uint8_t step = packet->packet_content[2];
+
+        // ignore wrong leader
+        if (leader_id != 0 && id != leader_id) return 0;
+
+        // ignore duplicate step
+        if (step == ring_step_seen) return 0;
+        ring_step_seen = step;
+
+        // ignore if already failed
+        if (ring_failed) return 0;
+
+        on_ring = true;
+        uint8_t next_step = step + 1;
+
+        // check ring finished
+        if (next_step >= RING_LEN) {
+            // proper return to leader
+            if (is_leader) {
+                ring_ok = true;
+                setColor(WHITE);
+            } else {
+                ring_failed = true;
+                uint8_t data_fail[1] = { MSG_RING_FAIL };
+                for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p)
+                    if (port_connected[p]) sendMessage(p, data_fail, 1, 1);
+            }
+            return 0;
+        }
+
+        uint8_t out = ring_seq[next_step];
+
+        // missing neighbor on path
+        if (!port_connected[out]) {
+            ring_failed = true;
+            uint8_t data_fail[1] = { MSG_RING_FAIL };
+            for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p)
+                if (port_connected[p]) sendMessage(p, data_fail, 1, 1);
+            return 0;
+        }
+
+        packet->packet_content[2] = next_step;
+        sendMessage(out, packet->packet_content, 3, 1);
+        return 0;
+    }
+
+    // process ring coloring
+    if (type == MSG_RING_COLOR) {
+        uint8_t id   = packet->packet_content[1];
+        uint8_t step = packet->packet_content[2];
+
+        // ignore wrong leader
+        if (leader_id != 0 && id != leader_id) return 0;
+
+        // ignore if already failed
+        if (ring_failed) return 0;
+
+        // ignore duplicate color step
+        if (step == color_step_seen) return 0;
+        color_step_seen = step;
+
+        on_ring = true;
+        setColor(RED);
+
+        uint8_t next_step = step + 1;
+
+        // end of coloring loop
+        if (next_step >= RING_LEN) {
+            return 0;
+        }
+
+        uint8_t out = ring_seq[next_step];
+
+        // missing neighbor on path
+        if (!port_connected[out]) {
+            ring_failed = true;
+            uint8_t data_fail[1] = { MSG_RING_FAIL };
+            for (uint8_t p = 0; p < NB_SERIAL_PORT; ++p)
+                if (port_connected[p]) sendMessage(p, data_fail, 1, 1);
+            return 0;
+        }
+
+        packet->packet_content[2] = next_step;
+        sendMessage(out, packet->packet_content, 3, 1);
+        return 0;
+    }
+
+    return 0;
+}
