@@ -156,10 +156,12 @@ Whenever a block is added or removed:
 
 # 5. Important Note About Yellow Blocks
 
-If you **remove a block** and then **place it back**, it may remain **yellow**.
+Auto-boot was **not enabled** during the video.
 
-**Reason:**  
-Auto-boot is **not enabled** on that block, so it does **not restart its program automatically**, and it simply keep the color **yellow**.
+---
 
-You must reboot the whole blocks manually if you want it to rejoin the algorithm.
+# 6. Demo
+[![](https://markdown-videos-api.jorgenkh.no/youtube/dQw4w9WgXcQ)](https://youtu.be/dQw4w9WgXcQ)
+
+
 
