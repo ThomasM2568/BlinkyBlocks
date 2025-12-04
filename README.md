@@ -31,8 +31,6 @@ The architecture is divided into **three main parts**:
    - Uses message IDs and conditional forwarding to prevent repeated message processing.  
    - Performs LED updates according to shape detection progress. 
 
-The modular design ensures that topology logic and communication feedback remain isolated and reusable. 
-
 ---
 
 ## 3. Avoiding Loops
@@ -52,8 +50,6 @@ To prevent infinite message loops or redundant propagation, the mechanism employ
 - **Ring and Color Step Tracking**:  
   The circle sequence uses `ring_step_seen` and `color_step_seen` to store the last step processed.  
   Any repeated token (from stale or delayed paths) is disregarded, maintaining a clean traversal path.
-
-Together, these constraints ensure that all broadcasts, tokens, and propagation waves terminate gracefully without feedback or message storms.
 
 ---
 
@@ -112,5 +108,6 @@ This guide explains **all LED colors** you may see during the circle detection p
 
 A video demonstration illustrates the shape transitions and LED states:  
 [![Demo Video](https://www.canva.com/design/DAG6j2xt-qs/kHveo4VeeYsWkw4HTbUqwQ/watch?utm_content=DAG6j2xt-qs&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h2976927901)](https://www.canva.com/design/DAG6j2xt-qs/kHveo4VeeYsWkw4HTbUqwQ/watch) [web:1]
+
 
 
