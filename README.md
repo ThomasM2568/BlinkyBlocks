@@ -1,5 +1,5 @@
 # Report: Distributed Shape Detection – Circle, Cross, and H Patterns
-**Authors:** Kyllian Cuevas, Pierre Meyer, Yohann Mitel, Thomas Mirbey  
+**Authors:** Kyllian Cuevas, Pierre Meyer, Thomas Mirbey  
 **Program:** M2 IoT 
 
 ---
@@ -108,6 +108,7 @@ This guide explains **all LED colors** you may see during the circle detection p
 
 A video demonstration illustrates the shape transitions and LED states:  
 [![Demo Video](https://www.canva.com/design/DAG6j2xt-qs/kHveo4VeeYsWkw4HTbUqwQ/watch?utm_content=DAG6j2xt-qs&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h2976927901)](https://www.canva.com/design/DAG6j2xt-qs/kHveo4VeeYsWkw4HTbUqwQ/watch) 
+
 
 
 
