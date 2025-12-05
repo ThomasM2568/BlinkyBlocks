@@ -1,4 +1,4 @@
-// Kyllian Cuevas, Pierre Meyer, Yohann Mitel, Thomas Mirbey | M2 IOT
+// Kyllian Cuevas, Pierre Meyer, Thomas Mirbey | M2 IOT
 #include <user_code.h>
 #include <layer3_generic.h>
 #include <microphone.h>
@@ -657,3 +657,4 @@ uint8_t process_standard_packet(L3_packet *packet) {
 
     return 0;
 }
+
